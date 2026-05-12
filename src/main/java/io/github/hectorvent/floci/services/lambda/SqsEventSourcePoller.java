@@ -69,7 +69,7 @@ public class SqsEventSourcePoller {
     }
 
     public void startPersistedPollers() {
-        List<EventSourceMapping> esms = esmStore.list();
+        List<EventSourceMapping> esms = esmStore.listAll();
         for (EventSourceMapping esm : esms) {
             if (esm.isEnabled() && esm.getEventSourceArn().contains(":sqs:")) {
                 startPolling(esm);
@@ -91,10 +91,11 @@ public class SqsEventSourcePoller {
             return; // already polling
         }
         String uuid = esm.getUuid();
+        String accountId = esm.getAccountId();
         long timerId = vertx.setPeriodic(pollIntervalMs, id -> {
-            // Re-fetch from storage on each tick so updates (batchSize, enabled) are visible
-            // ConcurrentHashMap.get() establishes happens-before with the prior put()
-            esmStore.get(uuid).ifPresent(latest -> {
+            // Re-fetch from storage on each tick so updates (batchSize, enabled) are visible.
+            // Use account-scoped lookup since this runs outside request scope.
+            esmStore.getForAccount(accountId, uuid).ifPresent(latest -> {
                 if (latest.isEnabled()) {
                     pollAndInvoke(latest);
                 }
@@ -124,7 +125,8 @@ public class SqsEventSourcePoller {
             try {
                 // Look up the function first so we can set an appropriate visibility
                 // timeout: fn.timeout + 30s keeps messages hidden while Lambda runs.
-                LambdaFunction fn = functionStore.get(esm.getRegion(), esm.getFunctionName())
+                // Use account-scoped lookup since this runs outside request scope.
+                LambdaFunction fn = functionStore.getForAccount(esm.getAccountId(), esm.getRegion(), esm.getFunctionName())
                         .orElse(null);
                 if (fn == null) {
                     LOG.warnv("ESM {0}: function {1} not found in region {2}, skipping",
@@ -212,7 +214,7 @@ public class SqsEventSourcePoller {
         }
     }
 
-    private String buildSqsEvent(List<Message> messages, EventSourceMapping esm) {
+    String buildSqsEvent(List<Message> messages, EventSourceMapping esm) {
         try {
             var records = objectMapper.createArrayNode();
             for (Message msg : messages) {
@@ -222,7 +224,9 @@ public class SqsEventSourcePoller {
                 record.put("body", msg.getBody());
                 ObjectNode attrs = record.putObject("attributes");
                 attrs.put("ApproximateReceiveCount", String.valueOf(msg.getReceiveCount()));
-                attrs.put("SentTimestamp", String.valueOf(System.currentTimeMillis()));
+                attrs.put("SentTimestamp", String.valueOf(msg.getSentTimestamp().toEpochMilli()));
+                attrs.put("SenderId", AwsArnUtils.accountOrDefault(esm.getEventSourceArn(), "000000000000"));
+                attrs.put("ApproximateFirstReceiveTimestamp", String.valueOf(System.currentTimeMillis()));
                 record.putObject("messageAttributes");
                 record.put("md5OfBody", msg.getMd5OfBody() != null ? msg.getMd5OfBody() : "");
                 record.put("eventSource", "aws:sqs");

@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.14] - 2026-05-10
+
+### Added
+
+- **textract:** Textract service support — `DetectDocumentText`, `AnalyzeDocument`, `StartDocumentTextDetection`, `GetDocumentTextDetection`, `StartDocumentAnalysis`, `GetDocumentAnalysis` ([#719](https://github.com/floci-io/floci/pull/719))
+- **multitenancy:** per-account storage isolation across all services — if the AWS access key ID is exactly 12 digits, it is used directly as the account ID and all resources are fully isolated from other accounts ([#753](https://github.com/floci-io/floci/pull/753))
+- **tls:** optional TLS/HTTPS support — set `FLOCI_TLS_ENABLED=true` to serve all endpoints over HTTPS; auto-generates and persists a self-signed certificate that includes `FLOCI_HOSTNAME`/`FLOCI_BASE_URL` in its SANs; user-provided certificates supported via `FLOCI_TLS_CERT_PATH` and `FLOCI_TLS_KEY_PATH` ([#754](https://github.com/floci-io/floci/pull/754))
+- **apigatewayv2:** WebSocket data-plane support — `wss://` connections, `PostToConnection`, `GetConnection`, `DeleteConnection`, `@connect`/`@disconnect`/`$default` routes ([#712](https://github.com/floci-io/floci/pull/712))
+- **cognito:** `UpdateGroup`, `ListUsersInGroup` ([#761](https://github.com/floci-io/floci/pull/761))
+- **cognito:** `AdminCreateUser` with `MessageAction=RESEND` ([#755](https://github.com/floci-io/floci/pull/755))
+- **ses:** `UpdateAccountSendingEnabled` (v1 Query protocol) ([#737](https://github.com/floci-io/floci/pull/737))
+- **ses:** `TagResource`, `UntagResource`, `ListTagsForResource` on v2 REST JSON protocol ([#749](https://github.com/floci-io/floci/pull/749))
+- **ses:** v2 tag endpoints extended to `EmailTemplate` ARNs ([#759](https://github.com/floci-io/floci/pull/759))
+- **ses:** v2 tag endpoints extended to `EmailIdentity` ARNs ([#760](https://github.com/floci-io/floci/pull/760))
+- **docker:** named-volume storage for child containers (RDS, ElastiCache, OpenSearch, MSK) so data survives container restarts without requiring a host bind-mount ([#743](https://github.com/floci-io/floci/pull/743))
+- **docker:** ship `awslocal` CLI wrapper in the `-compat` image ([#746](https://github.com/floci-io/floci/pull/746))
+
+### Fixed
+
+- **cfn:** reconcile Lambda functions on stack update ([#736](https://github.com/floci-io/floci/pull/736))
+- **docker:** `/etc/floci/aws/config` missing in published Docker images ([#740](https://github.com/floci-io/floci/pull/740))
+- **eventbridge:** persist and forward `SqsParameters.MessageGroupId` for FIFO SQS targets ([#742](https://github.com/floci-io/floci/pull/742))
+- **sqs:** tags set at `CreateQueue` not returned by `ListQueueTags` ([#747](https://github.com/floci-io/floci/pull/747))
+- **apigateway:** treat `ANY` method as wildcard when matching concrete HTTP methods ([#750](https://github.com/floci-io/floci/pull/750))
+- **s3:** parse `versionId` from copy-source header for `CopyObject` and multipart part-copy ([#751](https://github.com/floci-io/floci/pull/751))
+- **sqs:** drop uppercase `"Tags"` key from `CreateQueue` JSON handler to match AWS wire format ([#752](https://github.com/floci-io/floci/pull/752))
+
+### Documentation
+
+- All service and configuration docs moved to environment-variable-first; `application.yml` reference moved to `configuration/advanced/`
+- New page: [Multi-Account Isolation](docs/configuration/multi-account.md)
+- New page: [TLS / HTTPS](docs/configuration/tls.md)
+- Go Testcontainers page rewritten to match the published `testcontainers-floci-go` API
+- LocalStack migration table completed with all mapped variables (`USE_SSL`, `CUSTOM_SSL_CERT_PATH`, `DOCKER_HOST`, `PERSIST_STATE`, `LAMBDA_REMOTE_DOCKER`)
+
+## [1.5.13] - 2026-05-07
+
+### Added
+
+- **backup:** AWS Backup Phase 1 — vaults, plans, selections, on-demand jobs with simulated CREATED→RUNNING→COMPLETED lifecycle, recovery points, tagging via `SharedTagsController`, and `GetSupportedResourceTypes`
+- **codedeploy:** Server platform (Phase 4) — on-premises instance management (`RegisterOnPremisesInstance`, `DeregisterOnPremisesInstance`, `GetOnPremisesInstance`, `BatchGetOnPremisesInstances`, `ListOnPremisesInstances`, `AddTagsToOnPremisesInstances`, `RemoveTagsFromOnPremisesInstances`); Server AppSpec YAML parsing; EC2 and on-premises instance resolution by tag filters; full lifecycle event execution (`ApplicationStop` → `DownloadBundle` → `BeforeInstall` → `Install` → `AfterInstall` → `ApplicationStart` → `ValidateService`); SSM Run Command integration for hook script execution with graceful degradation when SSM is unavailable; per-instance `InstanceTarget` tracking in `ListDeploymentTargets`/`BatchGetDeploymentTargets`
+- **elbv2:** Lambda target type — ALB listeners forward requests to Lambda functions using the full ALB→Lambda event format (`httpMethod`, `path`, `queryStringParameters`, `multiValueQueryStringParameters`, `headers`, `multiValueHeaders`, `body`, `isBase64Encoded`); Lambda→ALB response mapping (`statusCode`, `headers`, `multiValueHeaders`, `body`, `isBase64Encoded`); Lambda target groups always report as healthy in `DescribeTargetHealth` without HTTP probing
+- **eventbridge:** Archive and Replay support — `CreateArchive`, `DescribeArchive`, `UpdateArchive`, `DeleteArchive`, `ListArchives`, `StartReplay`, `DescribeReplay`, `CancelReplay`, `ListReplays`; events captured automatically to matching archives and replayed on demand ([#702](https://github.com/floci-io/floci/pull/702))
+- **route53:** Route53 Phase 1 — hosted zones with auto-created SOA + NS records, `ChangeResourceRecordSets` (CREATE/UPSERT/DELETE with atomic batch validation), `ListResourceRecordSets`, change tracking (always INSYNC), health checks (create/get/list/update/delete), and per-resource tagging via `ChangeTagsForResource` / `ListTagsForResource`
+- **scheduler:** `TagResource`, `UntagResource`, `ListTagsForResource` for schedule groups ([#700](https://github.com/floci-io/floci/pull/700))
+- **sqs, dynamodb:** TRACE-level payload logging for request and response bodies to aid debugging ([#697](https://github.com/floci-io/floci/pull/697))
+- **ssm:** Run Command — `SendCommand`, `GetCommandInvocation`, `ListCommands`, `ListCommandInvocations`, `CancelCommand`, `DescribeInstanceInformation`; `UpdateInstanceInformation` (agent registration); `ec2messages` polling protocol (`GetMessages`, `AcknowledgeMessage`, `SendReply`, `FailMessage`, `DeleteMessage`, `GetEndpoint`) so the real `amazon-ssm-agent` running inside EC2 containers can register, receive commands, and report output
+- **transfer:** Transfer Family management-plane API — server lifecycle (`CreateServer`, `DescribeServer`, `DeleteServer`, `ListServers`, `StartServer`, `StopServer`, `UpdateServer`), user management (`CreateUser`, `DescribeUser`, `DeleteUser`, `ListUsers`, `UpdateUser`), SSH key management (`ImportSshPublicKey`, `DeleteSshPublicKey`), and tagging (`TagResource`, `UntagResource`, `ListTagsForResource`)
+
+### Fixed
+
+- **appconfig:** use capital `"Tags"` body key in `TagResource` / `ListTagsForResource` to match AWS SDK wire format ([#704](https://github.com/floci-io/floci/pull/704))
+- **docker:** respect `DOCKER_HOST` env var and handle bare `host:port` values without a URI scheme ([#705](https://github.com/floci-io/floci/pull/705))
+- **ec2:** `AssociateRouteTable` now returns `<associationState>` in the response; `DescribeRouteTables` supports the `association.route-table-association-id` filter; `DescribeTags` correctly applies `resource-id`, `resource-type`, `key`, and `value` filters ([#706](https://github.com/floci-io/floci/pull/706))
+
 ## [1.5.12] - 2026-05-04
 
 ### Added
@@ -529,7 +584,9 @@ Initial public release of Floci — a fast, free, open-source local AWS emulator
 
 ---
 
-[Unreleased]: https://github.com/floci-io/floci/compare/1.5.12...HEAD
+[Unreleased]: https://github.com/floci-io/floci/compare/1.5.14...HEAD
+[1.5.14]: https://github.com/floci-io/floci/compare/1.5.13...1.5.14
+[1.5.13]: https://github.com/floci-io/floci/compare/1.5.12...1.5.13
 [1.5.12]: https://github.com/floci-io/floci/compare/1.5.11...1.5.12
 [1.5.11]: https://github.com/floci-io/floci/compare/1.5.10...1.5.11
 [1.5.10]: https://github.com/floci-io/floci/compare/1.5.9...1.5.10

@@ -6,7 +6,7 @@
 
     <groupId>io.github.hectorvent</groupId>
     <artifactId>floci</artifactId>
-    <version>1.5.12</version>
+    <version>1.5.14</version>
     <packaging>jar</packaging>
 
     <name>Floci</name>
@@ -230,6 +230,10 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>rds</artifactId>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
         </dependency>
     </dependencies>
 

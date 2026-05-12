@@ -28,10 +28,15 @@ Floci exposes the classic Amazon SES Query API used by `aws ses ...` commands an
 | `GetSendQuota`                      | Return local send quota counters                          |
 | `GetSendStatistics`                 | Return aggregate delivery stats for sent messages         |
 | `GetAccountSendingEnabled`          | Report whether sending is enabled                         |
+| `UpdateAccountSendingEnabled`       | Enable or disable account-wide sending                    |
 | `ListVerifiedEmailAddresses`        | List verified email identities                            |
 | `DeleteVerifiedEmailAddress`        | Delete a verified email identity                          |
 | `SetIdentityNotificationTopic`      | Store SNS notification topic ARNs for an identity         |
 | `GetIdentityNotificationAttributes` | Read stored notification topic settings                   |
+| `SetIdentityFeedbackForwardingEnabled`     | Toggle feedback forwarding for an identity        |
+| `SetIdentityHeadersInNotificationsEnabled` | Toggle headers-in-notifications per notification type |
+| `SetIdentityMailFromDomain`         | Set or clear the MAIL FROM domain for an identity         |
+| `GetIdentityMailFromDomainAttributes` | Read MAIL FROM domain settings                          |
 | `GetIdentityDkimAttributes`         | Return DKIM status for identities                         |
 | `CreateConfigurationSet`            | Create a configuration set                                |
 | `DescribeConfigurationSet`          | Read a configuration set                                  |
@@ -39,20 +44,6 @@ Floci exposes the classic Amazon SES Query API used by `aws ses ...` commands an
 | `DeleteConfigurationSet`            | Delete a configuration set                                |
 
 ## Configuration
-
-```yaml
-floci:
-  services:
-    ses:
-      enabled: true
-      # smtp-host: mailpit        # SMTP server for email relay (empty = store only)
-      # smtp-port: 1025
-      # smtp-user: ""
-      # smtp-pass: ""
-      # smtp-starttls: DISABLED   # DISABLED, OPTIONAL, or REQUIRED
-```
-
-### Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
@@ -176,6 +167,7 @@ Alongside the classic Query API, Floci implements a subset of the SES v2 REST JS
 | `DELETE` | `/v2/email/identities/{emailIdentity}` | `DeleteEmailIdentity` |
 | `PUT` | `/v2/email/identities/{emailIdentity}/dkim` | `PutEmailIdentityDkimAttributes` |
 | `PUT` | `/v2/email/identities/{emailIdentity}/feedback` | `PutEmailIdentityFeedbackAttributes` |
+| `PUT` | `/v2/email/identities/{emailIdentity}/mail-from` | `PutEmailIdentityMailFromAttributes` |
 | `POST` | `/v2/email/outbound-emails` | `SendEmail` (simple / raw / templated) |
 | `POST` | `/v2/email/outbound-bulk-emails` | `SendBulkEmail` (templated, multiple destinations) |
 | `GET` | `/v2/email/account` | `GetAccount` |
@@ -190,5 +182,10 @@ Alongside the classic Query API, Floci implements a subset of the SES v2 REST JS
 | `GET` | `/v2/email/configuration-sets` | `ListConfigurationSets` |
 | `GET` | `/v2/email/configuration-sets/{name}` | `GetConfigurationSet` |
 | `DELETE` | `/v2/email/configuration-sets/{name}` | `DeleteConfigurationSet` |
+| `POST` | `/v2/email/tags` | `TagResource` |
+| `DELETE` | `/v2/email/tags?ResourceArn=...&TagKeys=...` | `UntagResource` |
+| `GET` | `/v2/email/tags?ResourceArn=...` | `ListTagsForResource` |
+
+Tag operations support these ARN forms: `arn:aws:ses:<region>:<account>:configuration-set/<name>`, `arn:aws:ses:<region>:<account>:template/<name>`, and `arn:aws:ses:<region>:<account>:identity/<email-or-domain>`. Tags supplied to `CreateConfigurationSet`, `CreateEmailTemplate`, and `CreateEmailIdentity` are reachable through `ListTagsForResource`; `UpdateEmailTemplate` does not modify tags. Other resource types return `NotFoundException`.
 
 Identity, template, configuration-set, and sent-message state is shared between the v1 Query API and the v2 REST JSON API, so a template created with `CreateTemplate` resolves through `SendEmail` on v2 (and vice versa), a configuration set created with `CreateConfigurationSet` is visible to both `DescribeConfigurationSet` (v1) and `GetConfigurationSet` (v2), and every send appears in the same `GET /_aws/ses` inspection mailbox.

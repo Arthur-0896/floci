@@ -7,10 +7,12 @@ import io.github.hectorvent.floci.services.athena.AthenaJsonHandler;
 import io.github.hectorvent.floci.services.codebuild.CodeBuildJsonHandler;
 import io.github.hectorvent.floci.services.codedeploy.CodeDeployJsonHandler;
 import io.github.hectorvent.floci.services.ecr.EcrJsonHandler;
+import io.github.hectorvent.floci.services.transfer.TransferHandler;
 import io.github.hectorvent.floci.services.ecs.EcsJsonHandler;
 import io.github.hectorvent.floci.services.firehose.FirehoseJsonHandler;
 import io.github.hectorvent.floci.services.glue.GlueJsonHandler;
 import io.github.hectorvent.floci.services.resourcegroupstagging.ResourceGroupsTaggingJsonHandler;
+import io.github.hectorvent.floci.services.textract.TextractJsonHandler;
 import io.github.hectorvent.floci.services.apigatewayv2.ApiGatewayV2JsonHandler;
 import io.github.hectorvent.floci.services.cloudwatch.logs.CloudWatchLogsHandler;
 import io.github.hectorvent.floci.services.cognito.CognitoJsonHandler;
@@ -18,6 +20,7 @@ import io.github.hectorvent.floci.services.eventbridge.EventBridgeHandler;
 import io.github.hectorvent.floci.services.kinesis.KinesisJsonHandler;
 import io.github.hectorvent.floci.services.kms.KmsJsonHandler;
 import io.github.hectorvent.floci.services.secretsmanager.SecretsManagerJsonHandler;
+import io.github.hectorvent.floci.services.ssm.Ec2MessagesJsonHandler;
 import io.github.hectorvent.floci.services.ssm.SsmJsonHandler;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
@@ -60,6 +63,9 @@ public class AwsJson11Controller {
     private final ResourceGroupsTaggingJsonHandler resourceGroupsTaggingJsonHandler;
     private final CodeBuildJsonHandler codeBuildJsonHandler;
     private final CodeDeployJsonHandler codeDeployJsonHandler;
+    private final Ec2MessagesJsonHandler ec2MessagesJsonHandler;
+    private final TransferHandler transferHandler;
+    private final TextractJsonHandler textractJsonHandler;
 
     @Inject
     public AwsJson11Controller(ObjectMapper objectMapper, ResolvedServiceCatalog catalog,
@@ -76,7 +82,10 @@ public class AwsJson11Controller {
                                FirehoseJsonHandler firehoseJsonHandler,
                                ResourceGroupsTaggingJsonHandler resourceGroupsTaggingJsonHandler,
                                CodeBuildJsonHandler codeBuildJsonHandler,
-                               CodeDeployJsonHandler codeDeployJsonHandler) {
+                               CodeDeployJsonHandler codeDeployJsonHandler,
+                               Ec2MessagesJsonHandler ec2MessagesJsonHandler,
+                               TransferHandler transferHandler,
+                               TextractJsonHandler textractJsonHandler) {
         this.objectMapper = objectMapper;
         this.catalog = catalog;
         this.regionResolver = regionResolver;
@@ -97,6 +106,9 @@ public class AwsJson11Controller {
         this.resourceGroupsTaggingJsonHandler = resourceGroupsTaggingJsonHandler;
         this.codeBuildJsonHandler = codeBuildJsonHandler;
         this.codeDeployJsonHandler = codeDeployJsonHandler;
+        this.ec2MessagesJsonHandler = ec2MessagesJsonHandler;
+        this.transferHandler = transferHandler;
+        this.textractJsonHandler = textractJsonHandler;
     }
 
     @POST
@@ -142,6 +154,9 @@ public class AwsJson11Controller {
                 case "tagging" -> resourceGroupsTaggingJsonHandler.handle(action, request, region);
                 case "codebuild" -> codeBuildJsonHandler.handle(action, request, region, regionResolver.getAccountId());
                 case "codedeploy" -> codeDeployJsonHandler.handle(action, request, region);
+                case "ec2messages" -> ec2MessagesJsonHandler.handle(action, request, region);
+                case "transfer" -> transferHandler.handle(action, request, region);
+                case "textract" -> textractJsonHandler.handle(action, request, region);
                 default -> null;
             };
             // catalog.matchTarget is protocol-agnostic: a JSON 1.0 target

@@ -3,6 +3,8 @@ package io.github.hectorvent.floci.services.opensearch;
 import io.github.hectorvent.floci.config.EmulatorConfig;
 import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
+import io.github.hectorvent.floci.core.common.RegionResolver;
+import io.github.hectorvent.floci.core.storage.AccountAwareStorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
 import io.github.hectorvent.floci.services.opensearch.model.ClusterConfig;
@@ -15,6 +17,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -31,22 +34,25 @@ public class OpenSearchService {
 
     private final StorageBackend<String, Domain> domainStore;
     private final EmulatorConfig config;
+    private final RegionResolver regionResolver;
     private final OpenSearchDomainManager domainManager;
     private final ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor();
 
     @Inject
     public OpenSearchService(StorageFactory storageFactory, EmulatorConfig config,
-                             OpenSearchDomainManager domainManager) {
+                             RegionResolver regionResolver, OpenSearchDomainManager domainManager) {
         this.domainStore = storageFactory.create("opensearch", "opensearch-domains.json",
                 new TypeReference<Map<String, Domain>>() {});
         this.config = config;
+        this.regionResolver = regionResolver;
         this.domainManager = domainManager;
     }
 
     OpenSearchService(StorageBackend<String, Domain> domainStore, EmulatorConfig config,
-                      OpenSearchDomainManager domainManager) {
+                      RegionResolver regionResolver, OpenSearchDomainManager domainManager) {
         this.domainStore = domainStore;
         this.config = config;
+        this.regionResolver = regionResolver;
         this.domainManager = domainManager;
     }
 
@@ -61,7 +67,7 @@ public class OpenSearchService {
     public void shutdown() {
         poller.shutdownNow();
         if (!config.services().opensearch().mock()) {
-            for (Domain domain : domainStore.scan(k -> true)) {
+            for (Domain domain : allDomains()) {
                 domainManager.stopDomain(domain);
             }
         }
@@ -76,16 +82,18 @@ public class OpenSearchService {
                     "Domain with name " + domainName + " already exists.", 409);
         }
 
-        String accountId = config.defaultAccountId();
+        String accountId = regionResolver.getAccountId();
         Domain domain = new Domain();
         domain.setDomainName(domainName);
         domain.setDomainId(accountId + "/" + domainName);
+        domain.setAccountId(accountId);
         domain.setArn(AwsArnUtils.Arn.of("es", region, accountId, "domain/" + domainName).toString());
         domain.setEngineVersion(engineVersion != null ? engineVersion : DEFAULT_ENGINE_VERSION);
         domain.setProcessing(false);
         domain.setDeleted(false);
         domain.setEndpoint("");
         domain.setCreatedAt(Instant.now());
+        domain.setVolumeId(String.format("%06x", new SecureRandom().nextInt(0xFFFFFF)));
 
         if (clusterConfig != null) {
             domain.setClusterConfig(clusterConfig);
@@ -170,6 +178,7 @@ public class OpenSearchService {
         domain.setDeleted(true);
         if (!config.services().opensearch().mock()) {
             domainManager.stopDomain(domain);
+            domainManager.removeDomainStorage(domain);
         }
         domainStore.delete(domainName);
         LOG.infov("Deleted OpenSearch domain: {0}", domainName);
@@ -229,14 +238,29 @@ public class OpenSearchService {
 
     private void startReadinessPoller() {
         poller.scheduleWithFixedDelay(() -> {
-            for (Domain domain : domainStore.scan(k -> true)) {
+            for (Domain domain : allDomains()) {
                 if (domain.isProcessing() && domainManager.isReady(domain)) {
                     domain.setProcessing(false);
-                    domainStore.put(domain.getDomainName(), domain);
+                    putDomain(domain);
                     LOG.infov("OpenSearch domain {0} is ready at {1}",
                             domain.getDomainName(), domain.getEndpoint());
                 }
             }
         }, 3, 3, TimeUnit.SECONDS);
+    }
+
+    private List<Domain> allDomains() {
+        if (domainStore instanceof AccountAwareStorageBackend<Domain> aware) {
+            return aware.scanAllAccounts();
+        }
+        return domainStore.scan(k -> true);
+    }
+
+    private void putDomain(Domain domain) {
+        if (domain.getAccountId() != null && domainStore instanceof AccountAwareStorageBackend<Domain> aware) {
+            aware.putForAccount(domain.getAccountId(), domain.getDomainName(), domain);
+        } else {
+            domainStore.put(domain.getDomainName(), domain);
+        }
     }
 }

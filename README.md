@@ -72,6 +72,8 @@
 | CodeBuild (real Docker build execution, S3 artifacts, CloudWatch logs) | ✅ | ❌ |
 | CodeDeploy (Lambda traffic shifting, lifecycle hooks, auto-rollback) | ✅ | ❌ |
 | Auto Scaling (groups, launch configs, reconciler, ELB v2 integration) | ✅ | ❌ |
+| SSM Run Command (SendCommand + real agent polling via ec2messages) | ✅ | ❌ |
+| Transfer Family (SFTP server management, users, SSH keys) | ✅ | ❌ |
 | Native binary | ✅ ~40 MB | ❌ |
 
 **Broad AWS coverage. Free forever.**
@@ -115,7 +117,7 @@ flowchart LR
         Router["HTTP Router\n(JAX-RS / Vert.x)"]
 
         subgraph Stateless ["Stateless Services"]
-            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis\nEventBridge · Scheduler · AppConfig\nCloudWatch · Step Functions\nCloudFormation · ACM\nAPI Gateway · ELB v2 · Auto Scaling\nCodeDeploy · Bedrock Runtime"]
+            A["SSM · SQS · SNS\nIAM · STS · KMS\nSecrets Manager · SES\nCognito · Kinesis\nEventBridge · Scheduler · AppConfig\nCloudWatch · Step Functions\nCloudFormation · ACM\nAPI Gateway · ELB v2 · Auto Scaling\nCodeDeploy · Backup · Bedrock Runtime · Route53 · Transfer"]
         end
 
         subgraph Stateful ["Stateful Services"]
@@ -208,6 +210,7 @@ All default images are configurable via environment variables, useful for pinnin
 | Service | How it works | Notable features |
 |---|---|---|
 | **SSM Parameter Store** | In-process | Version history, labels, SecureString, tagging |
+| **SSM Run Command** | In-process | `SendCommand`, `GetCommandInvocation`, `ListCommands`, `CancelCommand`; `DescribeInstanceInformation`; `ec2messages` polling protocol so the real `amazon-ssm-agent` running inside EC2 containers can register, receive commands, and report output |
 | **SQS** | In-process | Standard & FIFO, DLQ, visibility timeout, batch, tagging |
 | **SNS** | In-process | Topics, subscriptions, SQS / Lambda / HTTP delivery, tagging |
 | **S3** | In-process | Versioning, multipart upload, pre-signed URLs, Object Lock, event notifications |
@@ -245,16 +248,20 @@ All default images are configurable via environment variables, useful for pinnin
 | **AppConfigData** | In-process | Configuration sessions, dynamic configuration retrieval |
 | **Bedrock Runtime** | In-process (stub) | Dummy Converse and InvokeModel responses for local development; streaming returns 501 |
 | **EKS** | **Real Docker containers** (mock mode available) | Clusters, tagging; real mode starts k3s per cluster with a live Kubernetes API server |
-| **ELB v2** | In-process | Application and Network Load Balancers, target groups, listeners, path/host-based routing rules, tags |
+| **ELB v2** | In-process | Application and Network Load Balancers, target groups, listeners, path/host-based routing rules, Lambda targets (ALB→Lambda event format), tags |
 | **CodeBuild** | In-process + **real Docker containers** | Projects, report groups, source credentials; `StartBuild` runs real Docker containers, streams logs to CloudWatch, uploads artifacts to S3 via `docker cp` (works in Docker-in-Docker) |
 | **CodeDeploy** | In-process + **Lambda traffic shifting** | Applications, deployment groups, deployment configs; 17 `CodeDeployDefault.*` built-ins pre-seeded; `CreateDeployment` shifts Lambda alias `RoutingConfig` weights, invokes lifecycle hooks, auto-rolls back on failure |
 | **Auto Scaling** | In-process + **background reconciler** | Launch configurations, auto scaling groups with min/max/desired capacity; background loop (10 s) calls `RunInstances` / `TerminateInstances` to meet desired capacity; lifecycle hooks, scaling policies, ELB v2 target group auto-registration |
+| **AWS Backup** | In-process | Vaults, backup plans with rules, resource selections, on-demand jobs with simulated lifecycle (CREATED → RUNNING → COMPLETED), recovery points, tagging |
+| **Route53** | In-process | Hosted zones with auto-created SOA + NS records, resource record sets (CREATE/UPSERT/DELETE with atomic validation), change tracking (always INSYNC), health checks, and per-resource tagging |
+| **Transfer Family** | In-process | Server lifecycle (`CreateServer` / `DeleteServer` / `StartServer` / `StopServer` / `UpdateServer`), user management, SSH public key import, and tagging |
+| **Textract** | In-process (stub) | API-compatible stubs for all operations; dummy block data with realistic shape and metadata; async job simulation with immediate SUCCEEDED status |
 
 > **Lambda, ElastiCache, RDS, MSK, ECS, EC2, EKS, OpenSearch, and CodeBuild** spin up real Docker containers and support IAM authentication and SigV4 request signing — the same auth flow as production AWS. **ECR** runs a shared `registry:2` container so the stock `docker` client can push and pull image bytes against repositories returned by the AWS-shaped control plane.
 >
 > For per-service operation counts and endpoint protocols, see the [Services Overview](https://floci.io/floci/services/) in the documentation site.
 
-**42 AWS services supported.**
+**46 AWS services supported.**
 
 ## Persistence & Storage Modes
 
@@ -271,6 +278,20 @@ Floci features a flexible storage architecture designed to balance developer pro
 > The default **`memory`** mode is ideal for fast, ephemeral CI pipelines where state doesn't need to survive restarts. Switch to **`hybrid`** for local development when you want state preserved across container restarts without sacrificing performance.
 
 For more details, visit the [Storage Configuration documentation](https://floci.io/floci/configuration/storage/).
+
+## Multi-Account Isolation
+
+Floci supports full per-account resource isolation with no extra configuration. If your AWS access key ID is **exactly 12 digits**, Floci uses it directly as the account ID — resources created by one account are completely invisible to another.
+
+```bash
+# Two accounts, full isolation — same queue name, separate namespaces
+AWS_ACCESS_KEY_ID=111111111111 aws sqs create-queue --queue-name orders
+AWS_ACCESS_KEY_ID=222222222222 aws sqs create-queue --queue-name orders
+```
+
+Any other key format (e.g. `test`, `AKIA…`) falls back to `FLOCI_DEFAULT_ACCOUNT_ID` (`000000000000` by default) — the standard single-account setup.
+
+→ [Multi-Account Isolation docs](https://floci.io/floci/configuration/multi-account/)
 
 ## Quick Start
 
@@ -303,7 +324,6 @@ docker run -d --name floci \
   -p 4566:4566 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e FLOCI_DEFAULT_REGION=us-east-1 \
-  -e FLOCI_SERVICES_LAMBDA_DOCKER_NETWORK=bridge \
   -u root \
   floci/floci:latest
 ```

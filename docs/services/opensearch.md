@@ -79,27 +79,6 @@ services:
 
 ## Configuration
 
-```yaml title="application.yml"
-floci:
-  services:
-    opensearch:
-      enabled: true
-      mock: false                                   # true = metadata only, no Docker
-      default-image: "opensearchproject/opensearch:2"
-      proxy-base-port: 9400                         # port range for real-mode containers
-      proxy-max-port: 9499
-      keep-running-on-shutdown: false               # leave containers running after Floci stops
-      # data-path is derived from floci.storage.persistent-path/opensearch
-      # docker network is shared with all other services via floci.services.docker-network
-
-  storage:
-    services:
-      opensearch:
-        flush-interval-ms: 5000                     # flush interval when using hybrid/wal storage
-```
-
-### Environment Variables
-
 | Variable | Default | Description |
 |---|---|---|
 | `FLOCI_SERVICES_OPENSEARCH_ENABLED` | `true` | Enable/disable the service |
@@ -134,7 +113,7 @@ services:
 - **Engine version default:** `OpenSearch_2.11`
 - **Supported engine versions:** `OpenSearch_2.13`, `OpenSearch_2.11`, `OpenSearch_2.9`, `OpenSearch_2.7`, `OpenSearch_2.5`, `OpenSearch_2.3`, `OpenSearch_1.3`, `OpenSearch_1.2`, `Elasticsearch_7.10`, `Elasticsearch_7.9`, `Elasticsearch_7.8`
 - **Cluster defaults:** `m5.large.search`, 1 instance, EBS enabled with 10 GiB `gp2` volume.
-- **Data path:** `{floci.storage.persistent-path}/opensearch/{domainName}` — follows the shared storage root.
+- **Container storage:** each domain gets a named Docker volume (`floci-opensearch-{volumeId}`) created automatically. In memory mode the volume is removed on domain delete; in persistent modes it is retained unless `FLOCI_STORAGE_PRUNE_VOLUMES_ON_DELETE=true`.
 
 ## Examples
 

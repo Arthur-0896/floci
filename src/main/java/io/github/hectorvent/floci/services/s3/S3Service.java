@@ -38,7 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @ApplicationScoped
 public class S3Service {
-    private static final String DEFAULT_OWNER_ID = "000000000000";
+    private String ownerId() { return regionResolver != null ? regionResolver.getAccountId() : "000000000000"; }
     private static final String DEFAULT_OWNER_DISPLAY_NAME = "floci";
     private static final String ALL_USERS_GROUP_URI = "http://acs.amazonaws.com/groups/global/AllUsers";
     private static final String AUTHENTICATED_USERS_GROUP_URI = "http://acs.amazonaws.com/groups/global/AuthenticatedUsers";
@@ -637,6 +637,11 @@ public class S3Service {
     }
 
     public S3Object copyObject(String sourceBucket, String sourceKey,
+                               String destBucket, String destKey, String versionId) {
+        return copyObject(sourceBucket, sourceKey, destBucket, destKey, null, new CopyObjectOptions());
+    }
+
+    public S3Object copyObject(String sourceBucket, String sourceKey,
                                String destBucket, String destKey,
                                String metadataDirective, Map<String, String> replacementMetadata,
                                String storageClass, String contentType) {
@@ -667,49 +672,34 @@ public class S3Service {
     }
 
     public S3Object copyObject(String sourceBucket, String sourceKey,
+                               String destBucket, String destKey, String versionId,
+                               String metadataDirective, Map<String, String> replacementMetadata,
+                               String storageClass, String contentType, String contentEncoding,
+                               String contentDisposition, String cacheControl, String serverSideEncryption, String acl) {
+        return copyObject(sourceBucket, sourceKey, destBucket, destKey, versionId,
+                new CopyObjectOptions()
+                        .withMetadataDirective(metadataDirective)
+                        .withReplacementMetadata(replacementMetadata)
+                        .withStorageClass(storageClass)
+                        .withContentType(contentType)
+                        .withContentEncoding(contentEncoding)
+                        .withContentDisposition(contentDisposition)
+                        .withCacheControl(cacheControl)
+                        .withServerSideEncryption(serverSideEncryption)
+                        .withAcl(acl));
+    }
+    public S3Object copyObject(String sourceBucket, String sourceKey,
+                               String destBucket, String destKey, String versionId, CopyObjectOptions options)
+    {
+        S3Object source = getObject(sourceBucket, sourceKey, versionId);
+        return copyS3Object(sourceBucket, sourceKey,
+                destBucket, destKey, source, options);
+    }
+
+    public S3Object copyObject(String sourceBucket, String sourceKey,
                                String destBucket, String destKey, CopyObjectOptions options) {
         S3Object source = getObject(sourceBucket, sourceKey);
-        ensureBucketExists(destBucket);
-        CopyObjectOptions effectiveOptions = options != null ? options : new CopyObjectOptions();
-        String normalizedServerSideEncryption = normalizeServerSideEncryption(effectiveOptions.getServerSideEncryption());
-
-        boolean replaceMetadata = "REPLACE".equalsIgnoreCase(effectiveOptions.getMetadataDirective());
-        Map<String, String> metadata = replaceMetadata ? new LinkedHashMap<>() : new LinkedHashMap<>(source.getMetadata());
-        if (replaceMetadata && effectiveOptions.getReplacementMetadata() != null) {
-            metadata.putAll(effectiveOptions.getReplacementMetadata());
-        }
-
-        String effectiveContentType = replaceMetadata && effectiveOptions.getContentType() != null
-                ? effectiveOptions.getContentType()
-                : source.getContentType();
-        String effectiveStorageClass = effectiveOptions.getStorageClass() != null
-                ? effectiveOptions.getStorageClass()
-                : source.getStorageClass();
-        String effectiveContentEncoding = replaceMetadata && effectiveOptions.getContentEncoding() != null
-                ? effectiveOptions.getContentEncoding()
-                : source.getContentEncoding();
-        String effectiveContentDisposition = replaceMetadata && effectiveOptions.getContentDisposition() != null
-                ? effectiveOptions.getContentDisposition()
-                : source.getContentDisposition();
-        String effectiveCacheControl = replaceMetadata && effectiveOptions.getCacheControl() != null
-                ? effectiveOptions.getCacheControl()
-                : source.getCacheControl();
-        String effectiveServerSideEncryption = normalizedServerSideEncryption != null
-                ? normalizedServerSideEncryption
-                : source.getServerSideEncryption();
-        S3Object copy = storeObject(destBucket, destKey, source.getData(), effectiveContentType, metadata,
-                source.getChecksum(), source.getParts(),
-                new PutObjectOptions()
-                        .withStorageClass(effectiveStorageClass)
-                        .withContentEncoding(effectiveContentEncoding)
-                        .withContentDisposition(effectiveContentDisposition)
-                        .withCacheControl(effectiveCacheControl)
-                        .withServerSideEncryption(effectiveServerSideEncryption)
-                        .withAcl(effectiveOptions.getAcl()));
-        copy.setETag(source.getETag());
-        LOG.debugv("Copied object: {0}/{1} -> {2}/{3}", sourceBucket, sourceKey, destBucket, destKey);
-        fireNotifications(destBucket, destKey, "ObjectCreated:Copy", copy);
-        return copy;
+        return copyS3Object(sourceBucket, sourceKey, destBucket, destKey, source, options);
     }
 
     // --- Versioning Operations ---
@@ -1093,8 +1083,9 @@ public class S3Service {
     }
 
     public String uploadPartCopy(String destBucket, String destKey, String uploadId, int partNumber,
-                                  String sourceBucket, String sourceKey, String copySourceRange) {
-        S3Object source = getObject(sourceBucket, sourceKey);
+                                  String sourceBucket, String sourceKey, String sourceVersionId,
+                                  String copySourceRange) {
+        S3Object source = getObject(sourceBucket, sourceKey, sourceVersionId);
         byte[] data = source.getData();
 
         if (copySourceRange != null && !copySourceRange.isBlank()) {
@@ -1397,7 +1388,7 @@ public class S3Service {
     public String getBucketAcl(String bucketName) {
         Bucket bucket = bucketStore.get(bucketName)
                 .orElseThrow(() -> new AwsException("NoSuchBucket", "The specified bucket does not exist.", 404));
-        return bucket.getAcl() != null ? bucket.getAcl() : defaultAclXml(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME);
+        return bucket.getAcl() != null ? bucket.getAcl() : defaultAclXml(ownerId(), DEFAULT_OWNER_DISPLAY_NAME);
     }
 
     public void putBucketAcl(String bucketName, String acl) {
@@ -1409,7 +1400,7 @@ public class S3Service {
 
     public String getObjectAcl(String bucketName, String key, String versionId) {
         S3Object obj = getObject(bucketName, key, versionId);
-        return obj.getAcl() != null ? obj.getAcl() : defaultAclXml(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME);
+        return obj.getAcl() != null ? obj.getAcl() : defaultAclXml(ownerId(), DEFAULT_OWNER_DISPLAY_NAME);
     }
 
     public void putObjectAcl(String bucketName, String key, String versionId, String acl) {
@@ -1517,16 +1508,16 @@ public class S3Service {
                 .build();
     }
 
-    static String cannedObjectAclXml(String cannedAcl) {
+    String cannedObjectAclXml(String cannedAcl) {
         if (cannedAcl == null || cannedAcl.isBlank()) {
             return null;
         }
         return switch (cannedAcl) {
             case "private", "bucket-owner-read", "bucket-owner-full-control" ->
-                    defaultAclXml(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME);
+                    defaultAclXml(ownerId(), DEFAULT_OWNER_DISPLAY_NAME);
             // Floci currently runs as a single synthetic account, so there is no distinct EC2 bundle-reader
             // principal to represent in GetObjectAcl responses yet.
-            case "aws-exec-read" -> defaultAclXml(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME);
+            case "aws-exec-read" -> defaultAclXml(ownerId(), DEFAULT_OWNER_DISPLAY_NAME);
             case "public-read" -> objectAclXml(
                     ownerFullControlGrant(),
                     groupGrant(ALL_USERS_GROUP_URI, "READ"));
@@ -1560,8 +1551,8 @@ public class S3Service {
         return normalized;
     }
 
-    private static String ownerFullControlGrant() {
-        return canonicalUserGrant(DEFAULT_OWNER_ID, DEFAULT_OWNER_DISPLAY_NAME, "FULL_CONTROL");
+    private String ownerFullControlGrant() {
+        return canonicalUserGrant(ownerId(), DEFAULT_OWNER_DISPLAY_NAME, "FULL_CONTROL");
     }
 
     private static String canonicalUserGrant(String id, String displayName, String permission) {
@@ -1587,11 +1578,11 @@ public class S3Service {
                 .build();
     }
 
-    private static String objectAclXml(String... grants) {
+    private String objectAclXml(String... grants) {
         XmlBuilder xml = new XmlBuilder()
                 .start("AccessControlPolicy")
                 .start("Owner")
-                .elem("ID", DEFAULT_OWNER_ID)
+                .elem("ID", ownerId())
                 .elem("DisplayName", DEFAULT_OWNER_DISPLAY_NAME)
                 .end("Owner")
                 .start("AccessControlList");
@@ -1626,7 +1617,7 @@ public class S3Service {
         for (QueueNotification qn : config.getQueueConfigurations()) {
             if (qn.events().stream().anyMatch(p -> matchesEvent(p, eventName)) && qn.matchesKey(key)) {
                 try {
-                    sqsService.sendMessage(sqsUrlFromArn(qn.queueArn()), eventJson, 0);
+                    sqsService.sendMessage(sqsUrlFromArn(qn.queueArn()), eventJson, 0, extractRegionFromArn(qn.queueArn()));
                     LOG.debugv("Fired S3 event {0} to SQS {1}", eventName, qn.queueArn());
                 } catch (Exception e) {
                     LOG.warnv("Failed to deliver S3 event to SQS {0}: {1}", qn.queueArn(), e.getMessage());
@@ -2025,5 +2016,50 @@ public class S3Service {
         } catch (IOException e) {
             LOG.errorv(e, "Failed to delete directory: {0}", dir);
         }
+    }
+
+    private S3Object copyS3Object(String sourceBucket, String sourceKey,
+                          String destBucket, String destKey, S3Object source, CopyObjectOptions options) {
+        ensureBucketExists(destBucket);
+        CopyObjectOptions effectiveOptions = options != null ? options : new CopyObjectOptions();
+        String normalizedServerSideEncryption = normalizeServerSideEncryption(effectiveOptions.getServerSideEncryption());
+
+        boolean replaceMetadata = "REPLACE".equalsIgnoreCase(effectiveOptions.getMetadataDirective());
+        Map<String, String> metadata = replaceMetadata ? new LinkedHashMap<>() : new LinkedHashMap<>(source.getMetadata());
+        if (replaceMetadata && effectiveOptions.getReplacementMetadata() != null) {
+            metadata.putAll(effectiveOptions.getReplacementMetadata());
+        }
+
+        String effectiveContentType = replaceMetadata && effectiveOptions.getContentType() != null
+                ? effectiveOptions.getContentType()
+                : source.getContentType();
+        String effectiveStorageClass = effectiveOptions.getStorageClass() != null
+                ? effectiveOptions.getStorageClass()
+                : source.getStorageClass();
+        String effectiveContentEncoding = replaceMetadata && effectiveOptions.getContentEncoding() != null
+                ? effectiveOptions.getContentEncoding()
+                : source.getContentEncoding();
+        String effectiveContentDisposition = replaceMetadata && effectiveOptions.getContentDisposition() != null
+                ? effectiveOptions.getContentDisposition()
+                : source.getContentDisposition();
+        String effectiveCacheControl = replaceMetadata && effectiveOptions.getCacheControl() != null
+                ? effectiveOptions.getCacheControl()
+                : source.getCacheControl();
+        String effectiveServerSideEncryption = normalizedServerSideEncryption != null
+                ? normalizedServerSideEncryption
+                : source.getServerSideEncryption();
+        S3Object copy = storeObject(destBucket, destKey, source.getData(), effectiveContentType, metadata,
+                source.getChecksum(), source.getParts(),
+                new PutObjectOptions()
+                        .withStorageClass(effectiveStorageClass)
+                        .withContentEncoding(effectiveContentEncoding)
+                        .withContentDisposition(effectiveContentDisposition)
+                        .withCacheControl(effectiveCacheControl)
+                        .withServerSideEncryption(effectiveServerSideEncryption)
+                        .withAcl(effectiveOptions.getAcl()));
+        copy.setETag(source.getETag());
+        LOG.debugv("Copied object: {0}/{1} -> {2}/{3}", sourceBucket, sourceKey, destBucket, destKey);
+        fireNotifications(destBucket, destKey, "ObjectCreated:Copy", copy);
+        return copy;
     }
 }

@@ -1,5 +1,6 @@
 package io.github.hectorvent.floci.services.ses;
 
+import io.github.hectorvent.floci.core.common.AwsArnUtils;
 import io.github.hectorvent.floci.core.common.AwsException;
 import io.github.hectorvent.floci.core.storage.StorageBackend;
 import io.github.hectorvent.floci.core.storage.StorageFactory;
@@ -9,6 +10,7 @@ import io.github.hectorvent.floci.services.ses.model.ConfigurationSet;
 import io.github.hectorvent.floci.services.ses.model.EmailTemplate;
 import io.github.hectorvent.floci.services.ses.model.Identity;
 import io.github.hectorvent.floci.services.ses.model.SentEmail;
+import io.github.hectorvent.floci.services.ses.model.Tag;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,8 +28,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -178,9 +183,6 @@ public class SesService {
     }
 
     public String sendRawEmail(String source, List<String> destinations, String rawMessage, String region) {
-        if (source == null || source.isBlank()) {
-            throw new AwsException("InvalidParameterValue", "Source email is required.", 400);
-        }
         if (rawMessage == null || rawMessage.isBlank()) {
             throw new AwsException("InvalidParameterValue", "RawMessage.Data is required.", 400);
         }
@@ -222,9 +224,20 @@ public class SesService {
 
     public void setDkimAttributes(String identityValue, boolean signingEnabled, String region) {
         String key = identityKey(region, identityValue);
-        Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "Identity does not exist: " + identityValue, 404));
+        Identity identity = identityStore.get(key).orElse(null);
+
+        if (identity == null) {
+            String domain = identityValue != null && identityValue.contains("@")
+                    ? identityValue.substring(identityValue.indexOf('@') + 1)
+                    : identityValue;
+            if (identityValue != null && identityValue.contains("@")
+                    && identityStore.get(identityKey(region, domain)).isPresent()) {
+                return;
+            }
+            throw new AwsException("BadRequestException",
+                    "Domain " + domain + " is not verified for DKIM signing.", 400);
+        }
+
         identity.setDkimEnabled(signingEnabled);
         if (signingEnabled) {
             identity.setDkimVerificationStatus("Success");
@@ -238,11 +251,74 @@ public class SesService {
     public void setFeedbackForwardingEnabled(String identityValue, boolean enabled, String region) {
         String key = identityKey(region, identityValue);
         Identity identity = identityStore.get(key)
-                .orElseThrow(() -> new AwsException("NotFoundException",
-                        "Identity does not exist: " + identityValue, 404));
+                .orElseThrow(() -> new AwsException("InvalidParameterValue",
+                        "Identity " + identityValue
+                                + " is invalid. Must be a verified email address or domain.", 400));
         identity.setFeedbackForwardingEnabled(enabled);
         identityStore.put(key, identity);
         LOG.infov("Updated feedback forwarding for {0}: enabled={1}", identityValue, enabled);
+    }
+
+    public void setMailFromDomain(String identityValue, String mailFromDomain,
+                                   String behaviorOnMxFailure, String region) {
+        String normalizedBehavior = null;
+        if (behaviorOnMxFailure != null) {
+            if (!"UseDefaultValue".equals(behaviorOnMxFailure)
+                    && !"RejectMessage".equals(behaviorOnMxFailure)) {
+                throw new AwsException("ValidationError",
+                        "1 validation error detected: Value at 'behaviorOnMXFailure' failed to satisfy "
+                                + "constraint: Member must satisfy enum value set: [RejectMessage, UseDefaultValue]", 400);
+            }
+            normalizedBehavior = behaviorOnMxFailure;
+        }
+        boolean clearing = mailFromDomain == null || mailFromDomain.isEmpty();
+        if (!clearing && mailFromDomain.isBlank()) {
+            throw new AwsException("InvalidParameterValue",
+                    "MailFromDomain must be a domain or an empty string to clear; whitespace is not accepted.", 400);
+        }
+        String key = identityKey(region, identityValue);
+        Identity identity = identityStore.get(key)
+                .orElseThrow(() -> new AwsException("InvalidParameterValue",
+                        "Identity <" + identityValue + "> does not exist.", 400));
+        identity.setMailFromDomain(clearing ? null : mailFromDomain);
+        identity.setMailFromDomainStatus(clearing ? "Pending" : "Success");
+        if (normalizedBehavior != null) {
+            identity.setBehaviorOnMxFailure(normalizedBehavior);
+        }
+        identityStore.put(key, identity);
+        LOG.infov("Updated MAIL FROM domain for {0}: domain={1}, behavior={2}",
+                identityValue, mailFromDomain, normalizedBehavior);
+    }
+
+    public Identity getMailFromAttributes(String identityValue, String region) {
+        String key = identityKey(region, identityValue);
+        return identityStore.get(key).orElse(null);
+    }
+
+    private static final java.util.List<String> NOTIFICATION_TYPES =
+            java.util.List.of("Bounce", "Complaint", "Delivery");
+
+    public void setHeadersInNotificationsEnabled(String identityValue, String notificationType,
+                                                   boolean enabled, String region) {
+        if (notificationType == null || notificationType.isBlank()) {
+            throw new AwsException("InvalidParameterValue",
+                    "NotificationType is required.", 400);
+        }
+        if (!NOTIFICATION_TYPES.contains(notificationType)) {
+            throw new AwsException("ValidationError",
+                    "1 validation error detected: Value at 'notificationType' failed to satisfy "
+                            + "constraint: Member must satisfy enum value set: "
+                            + NOTIFICATION_TYPES, 400);
+        }
+        String key = identityKey(region, identityValue);
+        Identity identity = identityStore.get(key)
+                .orElseThrow(() -> new AwsException("InvalidParameterValue",
+                        "Identity " + identityValue
+                                + " is invalid. It must be a verified email address or domain.", 400));
+        identity.getHeadersInNotificationsEnabled().put(notificationType, enabled);
+        identityStore.put(key, identity);
+        LOG.infov("Updated headers-in-notifications for {0}: {1}={2}",
+                identityValue, notificationType, enabled);
     }
 
     public List<String> getVerifiedEmailAddresses(String region) {
@@ -280,6 +356,11 @@ public class SesService {
 
     public EmailTemplate createTemplate(EmailTemplate template, String region) {
         validateTemplate(template);
+        if (template.getTags() != null) {
+            for (Tag tag : template.getTags()) {
+                validateTag(tag);
+            }
+        }
         String key = templateKey(region, template.getTemplateName());
         if (templateStore.get(key).isPresent()) {
             throw new AwsException("AlreadyExists",
@@ -307,6 +388,8 @@ public class SesService {
                         "Template " + template.getTemplateName() + " does not exist.", 400));
         template.setCreatedTimestamp(existing.getCreatedTimestamp());
         template.setLastUpdatedTimestamp(Instant.now());
+        // Tags are managed exclusively via Tag/UntagResource — preserve them on update.
+        template.setTags(existing.getTags());
         templateStore.put(key, template);
         LOG.infov("Updated SES template: {0} in region {1}", template.getTemplateName(), region);
         return template;
@@ -339,7 +422,7 @@ public class SesService {
         }
         String key = configSetKey(region, configSet.getName());
         if (configSet.getTags() != null) {
-            for (ConfigurationSet.Tag tag : configSet.getTags()) {
+            for (Tag tag : configSet.getTags()) {
                 validateTag(tag);
             }
         }
@@ -400,7 +483,213 @@ public class SesService {
         }
     }
 
-    static void validateTag(ConfigurationSet.Tag tag) {
+    public List<Tag> listResourceTags(String arn, String region) {
+        ResourceRef ref = parseSesArn(arn);
+        return switch (ref.type()) {
+            case "configuration-set" -> listConfigurationSetTags(ref.name(), ref.region());
+            // AWS ListTagsForResource on template / identity ARNs uses the signing region
+            // for lookup (the ARN region is effectively ignored), unlike configuration-set
+            // which routes by the ARN's region.
+            case "template" -> listEmailTemplateTags(ref.name(), region);
+            case "identity" -> listIdentityTags(ref.name(), region);
+            default -> throw new AwsException("NotFoundException",
+                    "Resource " + arn + " was not found.", 404);
+        };
+    }
+
+    public void tagResource(String arn, String region, List<Tag> newTags) {
+        ResourceRef ref = parseSesArn(arn);
+        if (!ref.region().equals(region)) {
+            throw new AwsException("BadRequestException", "Failed to tag resource", 400);
+        }
+        if (newTags == null || newTags.isEmpty()) {
+            throw new AwsException("BadRequestException",
+                    "1 validation error detected: Value at 'tags' failed to satisfy constraint: "
+                            + "Member must have length greater than or equal to 1", 400);
+        }
+        for (Tag t : newTags) {
+            validateTag(t);
+        }
+        switch (ref.type()) {
+            case "configuration-set" -> tagConfigurationSet(ref.name(), ref.region(), newTags);
+            case "template" -> tagEmailTemplate(ref.name(), ref.region(), newTags);
+            case "identity" -> tagIdentity(ref.name(), ref.region(), newTags);
+            default -> throw new AwsException("NotFoundException",
+                    "Resource " + arn + " was not found.", 404);
+        }
+    }
+
+    public void untagResource(String arn, String region, List<String> tagKeys) {
+        ResourceRef ref = parseSesArn(arn);
+        if (tagKeys == null || tagKeys.isEmpty()) {
+            throw new AwsException("BadRequestException",
+                    "1 validation error detected: Value at 'tagKeys' failed to satisfy constraint: "
+                            + "Member must have length greater than or equal to 1", 400);
+        }
+        switch (ref.type()) {
+            case "configuration-set" -> untagConfigurationSet(ref.name(), ref.region(), tagKeys);
+            case "template" -> {
+                // AWS UntagResource on template / identity ARNs strictly requires the ARN
+                // region to match the signing region (rejects mismatch with
+                // BadRequestException), unlike configuration-set which routes the lookup
+                // to the ARN's region.
+                if (!ref.region().equals(region)) {
+                    throw new AwsException("BadRequestException", "Failed to untag resource", 400);
+                }
+                untagEmailTemplate(ref.name(), region, tagKeys);
+            }
+            case "identity" -> {
+                if (!ref.region().equals(region)) {
+                    throw new AwsException("BadRequestException", "Failed to untag resource", 400);
+                }
+                untagIdentity(ref.name(), region, tagKeys);
+            }
+            default -> throw new AwsException("NotFoundException",
+                    "Resource " + arn + " was not found.", 404);
+        }
+    }
+
+    private List<Tag> listConfigurationSetTags(String name, String region) {
+        ConfigurationSet cs = configSetStore.get(configSetKey(region, name))
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No ConfigurationSet present with name: " + name, 404));
+        return new ArrayList<>(cs.getTags());
+    }
+
+    private void tagConfigurationSet(String name, String region, List<Tag> newTags) {
+        String key = configSetKey(region, name);
+        ConfigurationSet cs = configSetStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No ConfigurationSet present with name: " + name, 404));
+        cs.setTags(mergeTags(cs.getTags(), newTags));
+        configSetStore.put(key, cs);
+        LOG.infov("Tagged SES configuration set: {0} (region {1}, +{2} tags)", name, region, newTags.size());
+    }
+
+    private void untagConfigurationSet(String name, String region, List<String> tagKeys) {
+        String key = configSetKey(region, name);
+        ConfigurationSet cs = configSetStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No ConfigurationSet present with name: " + name, 404));
+        Set<String> toRemove = new HashSet<>(tagKeys);
+        cs.getTags().removeIf(t -> toRemove.contains(t.key()));
+        configSetStore.put(key, cs);
+        LOG.infov("Untagged SES configuration set: {0} (region {1}, -{2} keys)", name, region, tagKeys.size());
+    }
+
+    private List<Tag> listEmailTemplateTags(String name, String region) {
+        EmailTemplate template = templateStore.get(templateKey(region, name))
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No Template present with name: " + name, 404));
+        return new ArrayList<>(template.getTags());
+    }
+
+    private void tagEmailTemplate(String name, String region, List<Tag> newTags) {
+        String key = templateKey(region, name);
+        EmailTemplate template = templateStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No Template present with name: " + name, 404));
+        template.setTags(mergeTags(template.getTags(), newTags));
+        templateStore.put(key, template);
+        LOG.infov("Tagged SES template: {0} (region {1}, +{2} tags)", name, region, newTags.size());
+    }
+
+    private static List<Tag> mergeTags(List<Tag> existing,
+                                                         List<Tag> incoming) {
+        Map<String, String> merged = new LinkedHashMap<>();
+        for (Tag t : existing) {
+            merged.put(t.key(), t.value());
+        }
+        for (Tag t : incoming) {
+            merged.put(t.key(), t.value());
+        }
+        List<Tag> out = new ArrayList<>();
+        merged.forEach((k, v) -> out.add(new Tag(k, v)));
+        return out;
+    }
+
+    private List<Tag> listIdentityTags(String identityValue, String region) {
+        Identity identity = identityStore.get(identityKey(region, identityValue))
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No EmailIdentity present with name: " + identityValue, 404));
+        return new ArrayList<>(identity.getTags());
+    }
+
+    private void tagIdentity(String identityValue, String region, List<Tag> newTags) {
+        String key = identityKey(region, identityValue);
+        Identity identity = identityStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No EmailIdentity present with name: " + identityValue, 404));
+        identity.setTags(mergeTags(identity.getTags(), newTags));
+        identityStore.put(key, identity);
+        LOG.infov("Tagged SES identity: {0} (region {1}, +{2} tags)", identityValue, region, newTags.size());
+    }
+
+    private void untagIdentity(String identityValue, String region, List<String> tagKeys) {
+        String key = identityKey(region, identityValue);
+        Identity identity = identityStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No EmailIdentity present with name: " + identityValue, 404));
+        Set<String> toRemove = new HashSet<>(tagKeys);
+        identity.getTags().removeIf(t -> toRemove.contains(t.key()));
+        identityStore.put(key, identity);
+        LOG.infov("Untagged SES identity: {0} (region {1}, -{2} keys)", identityValue, region, tagKeys.size());
+    }
+
+    public void setIdentityTags(String identityValue, String region, List<Tag> tags) {
+        if (tags != null) {
+            for (Tag tag : tags) {
+                validateTag(tag);
+            }
+        }
+        String key = identityKey(region, identityValue);
+        Identity identity = identityStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No EmailIdentity present with name: " + identityValue, 404));
+        identity.setTags(tags);
+        identityStore.put(key, identity);
+    }
+
+    private void untagEmailTemplate(String name, String region, List<String> tagKeys) {
+        String key = templateKey(region, name);
+        EmailTemplate template = templateStore.get(key)
+                .orElseThrow(() -> new AwsException("NotFoundException",
+                        "No Template present with name: " + name, 404));
+        Set<String> toRemove = new HashSet<>(tagKeys);
+        template.getTags().removeIf(t -> toRemove.contains(t.key()));
+        templateStore.put(key, template);
+        LOG.infov("Untagged SES template: {0} (region {1}, -{2} keys)", name, region, tagKeys.size());
+    }
+
+    private record ResourceRef(String region, String type, String name) {}
+
+    private static ResourceRef parseSesArn(String arn) {
+        if (arn == null || arn.isBlank()) {
+            throw new AwsException("BadRequestException", "ResourceArn is required.", 400);
+        }
+        AwsArnUtils.Arn parsed;
+        try {
+            parsed = AwsArnUtils.parse(arn);
+        } catch (IllegalArgumentException e) {
+            throw new AwsException("BadRequestException", "Invalid ARN: " + arn, 400);
+        }
+        if (!"ses".equals(parsed.service())) {
+            throw new AwsException("BadRequestException",
+                    "ResourceArn must be a SES ARN: " + arn, 400);
+        }
+        if (parsed.region().isEmpty() || parsed.accountId().isEmpty()) {
+            throw new AwsException("BadRequestException",
+                    "ResourceArn must include region and account: " + arn, 400);
+        }
+        String resource = parsed.resource();
+        int slash = resource.indexOf('/');
+        if (slash <= 0 || slash == resource.length() - 1) {
+            throw new AwsException("BadRequestException", "Invalid ARN: " + arn, 400);
+        }
+        return new ResourceRef(parsed.region(), resource.substring(0, slash), resource.substring(slash + 1));
+    }
+
+    static void validateTag(Tag tag) {
         if (tag == null) {
             throw new AwsException("InvalidParameterValue", "Tag must not be null.", 400);
         }

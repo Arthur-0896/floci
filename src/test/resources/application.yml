@@ -12,6 +12,7 @@ floci:
   storage:
     mode: memory
     persistent-path: ./target/test-data
+    prune-volumes-on-delete: true
     wal:
       compaction-interval-ms: 60000
     services:
@@ -43,6 +44,10 @@ floci:
     timeout-seconds: 5
     shutdown-grace-period-seconds: 2
 
+  tls:
+    enabled: false
+    self-signed: true
+
   docker:
     log-max-size: "10m"
     log-max-file: "3"
@@ -64,6 +69,7 @@ floci:
       enabled: true
     lambda:
       enabled: true
+      # aws-config-path:
       hot-reload:
         enabled: true
     apigateway:
@@ -160,4 +166,13 @@ floci:
     codedeploy:
       enabled: true
     autoscaling:
+      enabled: true
+    transfer:
+      enabled: true
+    backup:
+      enabled: true
+      job-completion-delay-seconds: 1
+    route53:
+      enabled: true
+    textract:
       enabled: true

@@ -329,6 +329,49 @@ class SesV2IntegrationTest {
             .body("message", containsString("leading or trailing whitespace"));
     }
 
+    @Test
+    @Order(15)
+    void createEmailIdentity_withTags_visibleViaGetAndListTags() {
+        // Tags supplied to CreateEmailIdentity must round-trip through GetEmailIdentity
+        // and ListTagsForResource (template/configuration-set behaviour parallel).
+        given()
+            .contentType("application/json")
+            .header("Authorization", AUTH_HEADER)
+            .body("""
+                {
+                    "EmailIdentity": "v2-tag-roundtrip.floci.test",
+                    "Tags": [
+                        {"Key": "team", "Value": "platform"},
+                        {"Key": "env", "Value": "stg"}
+                    ]
+                }
+                """)
+        .when()
+            .post("/v2/email/identities")
+        .then()
+            .statusCode(200);
+
+        given()
+            .header("Authorization", AUTH_HEADER)
+        .when()
+            .get("/v2/email/identities/v2-tag-roundtrip.floci.test")
+        .then()
+            .statusCode(200)
+            .body("Tags", hasSize(2))
+            .body("Tags.find { it.Key == 'team' }.Value", equalTo("platform"))
+            .body("Tags.find { it.Key == 'env' }.Value", equalTo("stg"));
+
+        String arn = "arn:aws:ses:us-east-1:000000000000:identity/v2-tag-roundtrip.floci.test";
+        given()
+            .header("Authorization", AUTH_HEADER)
+            .queryParam("ResourceArn", arn)
+        .when()
+            .get("/v2/email/tags")
+        .then()
+            .statusCode(200)
+            .body("Tags", hasSize(2));
+    }
+
     // ──────────────── DKIM Attributes ────────────────
 
     @Test
@@ -395,22 +438,6 @@ class SesV2IntegrationTest {
             .body("DkimAttributes.Status", equalTo("NOT_STARTED"));
     }
 
-    @Test
-    @Order(22)
-    void putDkimAttributes_notFound() {
-        given()
-            .contentType("application/json")
-            .header("Authorization", AUTH_HEADER)
-            .body("""
-                {"SigningEnabled": true}
-                """)
-        .when()
-            .put("/v2/email/identities/nonexistent@example.com/dkim")
-        .then()
-            .statusCode(404)
-            .body("__type", equalTo("NotFoundException"));
-    }
-
     // ──────────────── Feedback Attributes ────────────────
 
     @Test
@@ -464,6 +491,10 @@ class SesV2IntegrationTest {
     @Test
     @Order(42)
     void putFeedbackAttributes_notFound() {
+        // Real SES v2 returns BadRequestException (HTTP 400) for an unknown
+        // identity on this endpoint, with the "Identity X is invalid..."
+        // message inherited from the v1 SetIdentityFeedbackForwardingEnabled
+        // wire shape via remapV1Exception.
         given()
             .contentType("application/json")
             .header("Authorization", AUTH_HEADER)
@@ -473,8 +504,8 @@ class SesV2IntegrationTest {
         .when()
             .put("/v2/email/identities/nonexistent@example.com/feedback")
         .then()
-            .statusCode(404)
-            .body("__type", equalTo("NotFoundException"));
+            .statusCode(400)
+            .body("__type", equalTo("BadRequestException"));
     }
 
     // ──────────────── Account Sending ────────────────

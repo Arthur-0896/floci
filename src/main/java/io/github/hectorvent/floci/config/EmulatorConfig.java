@@ -27,13 +27,18 @@ public interface EmulatorConfig {
     Optional<String> hostname();
 
     /**
-     * Returns the effective base URL, taking hostname into account.
+     * Returns the effective base URL, taking hostname and TLS into account.
      * If hostname is set, replaces the host in baseUrl with it.
+     * If TLS is enabled, switches the scheme from http:// to https://.
      */
     default String effectiveBaseUrl() {
-        return hostname()
+        String url = hostname()
                 .map(h -> baseUrl().replaceFirst("://[^:/]+(:\\d+)?", "://" + h + "$1"))
                 .orElse(baseUrl());
+        if (tls().enabled() && url.startsWith("http://")) {
+            url = "https://" + url.substring(7);
+        }
+        return url;
     }
 
     @WithDefault("us-east-1")
@@ -62,6 +67,8 @@ public interface EmulatorConfig {
     DockerConfig docker();
 
     InitHooksConfig initHooks();
+
+    TlsConfig tls();
 
     interface DnsConfig {
         /**
@@ -95,6 +102,14 @@ public interface EmulatorConfig {
         @WithDefault("${floci.storage.persistent-path}")
         String hostPersistentPath();
 
+        /**
+         * When {@code true}, named volumes are removed immediately after a child container stops
+         * on resource delete. In {@code memory} storage mode volumes are always removed regardless
+         * of this flag. Defaults to {@code false} to match real AWS behaviour (data survives delete).
+         */
+        @WithDefault("false")
+        boolean pruneVolumesOnDelete();
+
         WalConfig wal();
 
         ServiceStorageOverrides services();
@@ -116,6 +131,7 @@ public interface EmulatorConfig {
         AppConfigDataStorageConfig appconfigdata();
         ElastiCacheStorageConfig elasticache();
         RdsStorageConfig rds();
+        BackupStorageConfig backup();
     }
 
     interface SsmStorageConfig {
@@ -214,6 +230,13 @@ public interface EmulatorConfig {
         Optional<String> mode();
     }
 
+    interface BackupStorageConfig {
+        Optional<String> mode();
+
+        @WithDefault("5000")
+        long flushIntervalMs();
+    }
+
     interface WalConfig {
         @WithDefault("30000")
         long compactionIntervalMs();
@@ -273,6 +296,40 @@ public interface EmulatorConfig {
         CodeBuildServiceConfig codebuild();
         CodeDeployServiceConfig codedeploy();
         AutoScalingServiceConfig autoscaling();
+        BackupServiceConfig backup();
+        Route53ServiceConfig route53();
+        TransferServiceConfig transfer();
+        TextractServiceConfig textract();
+    }
+
+    interface TransferServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
+    interface BackupServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("3")
+        int jobCompletionDelaySeconds();
+    }
+
+    interface Route53ServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+
+        @WithDefault("ns-1.awsdns-01.org")
+        String defaultNameserver1();
+
+        @WithDefault("ns-2.awsdns-02.net")
+        String defaultNameserver2();
+
+        @WithDefault("ns-3.awsdns-03.com")
+        String defaultNameserver3();
+
+        @WithDefault("ns-4.awsdns-04.co.uk")
+        String defaultNameserver4();
     }
 
     interface AutoScalingServiceConfig {
@@ -578,6 +635,11 @@ public interface EmulatorConfig {
         boolean enabled();
     }
 
+    interface TextractServiceConfig {
+        @WithDefault("true")
+        boolean enabled();
+    }
+
     interface EcrServiceConfig {
         @WithDefault("true")
         boolean enabled();
@@ -658,6 +720,19 @@ public interface EmulatorConfig {
          */
         @WithDefault("100")
         int unreservedConcurrencyMin();
+
+        /**
+         * Host path to bind-mount (read-only) into Lambda containers at /opt/aws-config.
+         * When set, no AWS credential env vars are injected; instead
+         * AWS_SHARED_CREDENTIALS_FILE and AWS_CONFIG_FILE are set to point at
+         * the mounted files, ensuring SDK discovery works regardless of container HOME.
+         * When absent, Floci injects credentials from its own environment
+         * (AWS_ACCESS_KEY_ID, etc.) or falls back to test/test/test.
+         * Blank values are treated as absent.
+         *
+         * Env var: FLOCI_SERVICES_LAMBDA_AWS_CONFIG_PATH
+         */
+        Optional<String> awsConfigPath();
 
         HotReload hotReload();
 
@@ -768,6 +843,33 @@ public interface EmulatorConfig {
 
         @WithDefault("30")
         long timeoutSeconds();
+    }
+
+    /**
+     * Optional TLS configuration for enabling HTTPS on the Floci server.
+     * When enabled, all endpoints are reachable via {@code https://} and
+     * WebSocket connections work via {@code wss://}.
+     *
+     * <p>Both HTTP and HTTPS are served simultaneously (LocalStack parity).
+     */
+    interface TlsConfig {
+        /** Enable TLS/HTTPS on the server. Env: FLOCI_TLS_ENABLED */
+        @WithDefault("false")
+        boolean enabled();
+
+        /** Path to PEM certificate file. Env: FLOCI_TLS_CERT_PATH */
+        Optional<String> certPath();
+
+        /** Path to PEM private key file. Env: FLOCI_TLS_KEY_PATH */
+        Optional<String> keyPath();
+
+        /**
+         * Auto-generate a self-signed certificate when no cert-path/key-path provided.
+         * The generated files are persisted to {@code {storage.persistent-path}/tls/}
+         * and reused across restarts. Env: FLOCI_TLS_SELF_SIGNED
+         */
+        @WithDefault("true")
+        boolean selfSigned();
     }
 
     /**

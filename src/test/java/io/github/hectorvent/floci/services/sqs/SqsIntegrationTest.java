@@ -251,6 +251,127 @@ class SqsIntegrationTest {
     }
 
     @Test
+    void createQueue_withTags_tagsReturnedByListQueueTags() {
+        // Regression test for https://github.com/floci-io/floci/issues/699
+        // Tags supplied at CreateQueue time must be visible via ListQueueTags.
+        String taggedQueueName = "tagged-queue-integration-test";
+
+        // Extract the queue URL from the CreateQueue response — don't hard-code the port
+        String taggedQueueUrl = given()
+            .contentType("application/x-www-form-urlencoded")
+            .formParam("Action", "CreateQueue")
+            .formParam("QueueName", taggedQueueName)
+            .formParam("Tag.1.Key", "k1")
+            .formParam("Tag.1.Value", "v1")
+            .formParam("Tag.2.Key", "k2")
+            .formParam("Tag.2.Value", "v2")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .body(containsString(taggedQueueName))
+            .extract().xmlPath().getString("CreateQueueResponse.CreateQueueResult.QueueUrl");
+
+        try {
+            given()
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("Action", "ListQueueTags")
+                .formParam("QueueUrl", taggedQueueUrl)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body(containsString("k1"))
+                .body(containsString("v1"))
+                .body(containsString("k2"))
+                .body(containsString("v2"));
+        } finally {
+            given()
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("Action", "DeleteQueue")
+                .formParam("QueueUrl", taggedQueueUrl)
+            .when()
+                .post("/");
+        }
+    }
+
+    @Test
+    void createQueue_jsonProtocol_withLowercaseTags_tagsReturnedByListQueueTags() {
+        // SQS JSON 1.0 schema uses lowercase "tags" for CreateQueue (cf. uppercase "Tags" for TagQueue).
+        String taggedQueueName = "tagged-queue-json-integration-test";
+
+        String taggedQueueUrl = given()
+            .contentType("application/x-amz-json-1.0")
+            .header("X-Amz-Target", "AmazonSQS.CreateQueue")
+            .body("{\"QueueName\": \"" + taggedQueueName + "\", \"tags\": {\"k1\": \"v1\", \"k2\": \"v2\"}}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().jsonPath().getString("QueueUrl");
+
+        try {
+            given()
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("Action", "ListQueueTags")
+                .formParam("QueueUrl", taggedQueueUrl)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body(containsString("k1"))
+                .body(containsString("v1"))
+                .body(containsString("k2"))
+                .body(containsString("v2"));
+        } finally {
+            given()
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("Action", "DeleteQueue")
+                .formParam("QueueUrl", taggedQueueUrl)
+            .when()
+                .post("/");
+        }
+    }
+
+    @Test
+    void createQueue_jsonProtocol_withUppercaseTags_tagsAreIgnored() {
+        // SQS JSON 1.0 only defines lowercase "tags" for CreateQueue; uppercase "Tags" belongs to
+        // TagQueue and must be treated as an unknown field here, matching real AWS.
+        String taggedQueueName = "ignored-uppercase-tags-queue";
+
+        String taggedQueueUrl = given()
+            .contentType("application/x-amz-json-1.0")
+            .header("X-Amz-Target", "AmazonSQS.CreateQueue")
+            .body("{\"QueueName\": \"" + taggedQueueName + "\", \"Tags\": {\"k1\": \"v1\"}}")
+        .when()
+            .post("/")
+        .then()
+            .statusCode(200)
+            .extract().jsonPath().getString("QueueUrl");
+
+        try {
+            given()
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("Action", "ListQueueTags")
+                .formParam("QueueUrl", taggedQueueUrl)
+            .when()
+                .post("/")
+            .then()
+                .statusCode(200)
+                .body(not(containsString("<Tag>")))
+                .body(not(containsString("k1")))
+                .body(not(containsString("v1")));
+        } finally {
+            given()
+                .contentType("application/x-www-form-urlencoded")
+                .formParam("Action", "DeleteQueue")
+                .formParam("QueueUrl", taggedQueueUrl)
+            .when()
+                .post("/");
+        }
+    }
+
+    @Test
     void unsupportedAction() {
         given()
             .contentType("application/x-www-form-urlencoded")

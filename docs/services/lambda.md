@@ -3,7 +3,7 @@
 **Protocol:** REST JSON
 **Endpoint:** `http://localhost:4566/2015-03-31/functions/...`
 
-Lambda runs your function code inside real Docker containers — the same way real AWS Lambda does.
+Floci Lambda runs your function code locally inside real Docker containers - close enough as AWS Lambda does (using Firecracker micro VM).
 
 ## Supported Operations
 
@@ -108,19 +108,6 @@ The `S3Key` must be an **absolute path** reachable by the Docker daemon. When Fl
 
 Hot-reload must be enabled explicitly. By default it is disabled so that `S3Bucket=hot-reload` is treated as a regular S3 bucket name.
 
-```yaml
-floci:
-  services:
-    lambda:
-      hot-reload:
-        enabled: true                # Required — off by default
-        allowed-paths:               # Optional allowlist; omit to allow any absolute path
-          - /home/user/projects
-          - /tmp
-```
-
-Via environment variables:
-
 ```bash
 FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED=true
 
@@ -192,26 +179,21 @@ These AWS Lambda operations have no handler in Floci. Calls will return `404` or
 
 ## Configuration
 
-```yaml
-floci:
-  services:
-    lambda:
-      enabled: true
-      ephemeral: false                     # Remove container after each invocation
-      default-memory-mb: 128
-      default-timeout-seconds: 3
-      runtime-api-base-port: 9200
-      runtime-api-max-port: 9299
-      code-path: ./data/lambda-code        # ZIP storage location
-      poll-interval-ms: 1000
-      container-idle-timeout-seconds: 300  # Idle container cleanup
-      region-concurrency-limit: 1000       # Concurrent executions ceiling per region
-      unreserved-concurrency-min: 100      # Min unreserved capacity PutFunctionConcurrency must leave
-      hot-reload:
-        enabled: false                     # true = enable bind-mount hot-reload via S3Bucket=hot-reload
-        # allowed-paths:                   # Optional path allowlist (host paths that may be bind-mounted)
-        #   - /home/user/projects
-```
+| Variable | Default | Description |
+|---|---|---|
+| `FLOCI_SERVICES_LAMBDA_ENABLED` | `true` | Enable or disable the service |
+| `FLOCI_SERVICES_LAMBDA_EPHEMERAL` | `false` | Remove containers after each invocation |
+| `FLOCI_SERVICES_LAMBDA_DEFAULT_MEMORY_MB` | `128` | Default function memory (MB) |
+| `FLOCI_SERVICES_LAMBDA_DEFAULT_TIMEOUT_SECONDS` | `3` | Default function timeout (seconds) |
+| `FLOCI_SERVICES_LAMBDA_RUNTIME_API_BASE_PORT` | `9200` | First port in the Lambda Runtime API range |
+| `FLOCI_SERVICES_LAMBDA_RUNTIME_API_MAX_PORT` | `9299` | Last port in the Lambda Runtime API range |
+| `FLOCI_SERVICES_LAMBDA_CODE_PATH` | `./data/lambda-code` | Directory where Lambda ZIP files are stored |
+| `FLOCI_SERVICES_LAMBDA_POLL_INTERVAL_MS` | `1000` | Event-source mapping poll interval (milliseconds) |
+| `FLOCI_SERVICES_LAMBDA_CONTAINER_IDLE_TIMEOUT_SECONDS` | `300` | Idle container shutdown timeout (seconds) |
+| `FLOCI_SERVICES_LAMBDA_REGION_CONCURRENCY_LIMIT` | `1000` | Maximum concurrent executions per region |
+| `FLOCI_SERVICES_LAMBDA_UNRESERVED_CONCURRENCY_MIN` | `100` | Minimum unreserved capacity `PutFunctionConcurrency` must leave |
+| `FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ENABLED` | `false` | Enable bind-mount hot-reload via `S3Bucket=hot-reload` |
+| `FLOCI_SERVICES_LAMBDA_HOT_RELOAD_ALLOWED_PATHS` | *(unset)* | Comma-separated allowlist of host paths that may be bind-mounted |
 
 ### Docker socket requirement
 
@@ -248,9 +230,10 @@ No extra configuration or `cap_add` is needed — Docker containers have
 non-root user) can bind UDP/53 without any changes to your Compose file.
 
 !!! tip "Docker Compose service names"
-    If Floci runs as a Docker Compose service and you attach Lambda containers
-    to that Compose network, set `FLOCI_HOSTNAME` to the service name, for
-    example `FLOCI_HOSTNAME=floci`. Floci then injects
+    If Floci runs as a Docker Compose service, set `FLOCI_HOSTNAME` to the
+    service name, for example `FLOCI_HOSTNAME=floci`. When no explicit Lambda
+    Docker network is configured, Floci automatically attaches Lambda
+    containers to the current Compose network. Floci then injects
     `AWS_ENDPOINT_URL=http://floci:4566` into Lambda containers and returns
     SQS `QueueUrl` values with the same reachable host.
 
@@ -270,13 +253,6 @@ If your Lambda functions have `AWS_ENDPOINT_URL=http://localhost.localstack.clou
 hardcoded, add the LocalStack suffix to Floci's DNS resolver so it resolves to
 Floci's IP without any function-side changes:
 
-```yaml
-floci:
-  dns:
-    extra-suffixes:
-      - localhost.localstack.cloud
-```
-
 Via environment variable — use a comma-separated list for multiple suffixes:
 
 ```bash
@@ -286,6 +262,51 @@ FLOCI_DNS_EXTRA_SUFFIXES=localhost.localstack.cloud
 # Multiple suffixes
 FLOCI_DNS_EXTRA_SUFFIXES=localhost.localstack.cloud,localhost.example.internal
 ```
+
+### Real AWS Credentials
+
+By default, Floci injects placeholder credentials (`test`/`test`/`test`) into Lambda containers. This is sufficient when all SDK calls target Floci's emulated services.
+
+For hybrid local/cloud testing — where some services are emulated and others hit real AWS — you can mount your host `~/.aws` directory into Lambda containers:
+
+```yaml
+services:
+  floci:
+    image: floci/floci:latest
+    environment:
+      FLOCI_SERVICES_LAMBDA_AWS_CONFIG_PATH: /Users/me/.aws
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+```
+
+When `aws-config-path` is set:
+
+- The host path is bind-mounted **read-only** into each Lambda container at `/opt/aws-config`
+- `AWS_SHARED_CREDENTIALS_FILE` and `AWS_CONFIG_FILE` env vars are set so the SDK discovers credentials regardless of the container's HOME directory
+- No `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` env vars are injected
+
+When unset (default), Floci reads credentials from its own environment and falls back to `test`/`test`/`test`.
+
+!!! tip "Routing specific services to real AWS"
+    To keep some services on Floci while others hit real AWS, clear the global endpoint and set service-specific overrides in your function's `--environment`:
+
+    ```
+    AWS_ENDPOINT_URL=                                          # clear Floci's global endpoint
+    AWS_ENDPOINT_URL_SES=http://localhost.floci.io:4566       # SES stays on Floci
+    AWS_ENDPOINT_URL_CLOUDWATCHLOGS=http://localhost.floci.io:4566  # CloudWatch stays on Floci
+    ```
+
+    The AWS SDK supports `AWS_ENDPOINT_URL_<SERVICE>` natively. Services without an override will use real AWS endpoints.
+
+!!! note "Credential passthrough without mounting"
+    If you don't need the full `~/.aws` directory (e.g., you only have static credentials), you can pass them to Floci's environment directly. When `aws-config-path` is unset, Floci forwards its own `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` env vars into Lambda containers:
+
+    ```yaml
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+    ```
 
 ### Private registry authentication
 

@@ -66,7 +66,8 @@ public class SqsJsonHandler {
     private Response handleCreateQueue(JsonNode request, String region) {
         String queueName = request.path("QueueName").asText(null);
         Map<String, String> attributes = jsonNodeToMap(request.path("Attributes"));
-        Queue queue = sqsService.createQueue(queueName, attributes, region);
+        Map<String, String> tags = jsonNodeToMap(request.path("tags"));
+        Queue queue = sqsService.createQueue(queueName, attributes, tags, region);
 
         ObjectNode response = objectMapper.createObjectNode();
         response.put("QueueUrl", queue.getQueueUrl());
